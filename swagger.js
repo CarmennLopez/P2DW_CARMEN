@@ -19,6 +19,10 @@ const options = {
         ],
         servers: [
             {
+                url: "https://apicarmenl-edfcawh6hsdafxcv.canadacentral-01.azurewebsites.net",
+                description: "Servidor de Producción (Azure)",
+            },
+            {
                 url: "http://localhost:3001",
                 description: "Servidor local",
             },

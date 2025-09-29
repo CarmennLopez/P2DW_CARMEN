@@ -1,49 +1,14 @@
 import express from "express";
-import sql from "mssql";
 import "dotenv/config"; 
-// Importamos la especificación y el middleware del archivo swagger.js
 import { swaggerSpec, swaggerUiMiddleware } from "./swagger.js";
+import { poolPromise } from "./db.js"; // Solo para verificar la conexión al inicio
+import * as carteleraService from "./cartelera.service.js";
 
 // ================================
 // Variables de entorno
 // ================================
 console.log("📌 Variables de entorno cargadas:");
-console.log("DB_USER:", process.env.DB_USER);
-console.log("DB_PASS:", process.env.DB_PASS ? "****" : "❌ NO DEFINIDO");
-console.log("DB_SERVER:", process.env.DB_SERVER);
-console.log("DB_NAME:", process.env.DB_NAME);
-
-// ================================
-// Configuración SQL Server
-// ================================
-const dbConfig = {
-    user: process.env.DB_USER,
-    password: process.env.DB_PASS,
-    server: process.env.DB_SERVER, 
-    database: process.env.DB_NAME, 
-    options: {
-        encrypt: true,
-        trustServerCertificate: true,
-    },
-};
-
-// Nombre de la tabla de Cartelera
-const TABLE_NAME = "Cartelera3067";
-
-// ================================
-// Pool de conexión
-// ================================
-const poolPromise = new sql.ConnectionPool(dbConfig)
-    .connect()
-    .then(pool => {
-        console.log("✅ Conectado a SQL Server");
-        return pool;
-    })
-    .catch(err => {
-        console.error("❌ Error de conexión a SQL Server:");
-        console.error("Detalles:", err.message);
-        return null;
-    });
+console.log("DB_SERVER:", process.env.DB_SERVER); // Mantenemos esto para feedback inicial
 
 // ================================
 // Servidor Express
@@ -51,8 +16,6 @@ const poolPromise = new sql.ConnectionPool(dbConfig)
 const app = express();
 app.use(express.json());
 
-// Configuración de Swagger
-// Usamos el middleware importado de swagger.js
 app.use("/api-docs", swaggerUiMiddleware.serve, swaggerUiMiddleware.setup(swaggerSpec));
 
 /**
@@ -124,13 +87,9 @@ app.use("/api-docs", swaggerUiMiddleware.serve, swaggerUiMiddleware.setup(swagge
  */
 app.get("/api/cartelera", async (req, res) => {
     try {
-        const pool = await poolPromise;
-        if (!pool) return res.status(500).json({ codError: "500", msgRespuesta: "BD no conectada" });
-
-        const result = await pool.request().query(`SELECT * FROM ${TABLE_NAME}`);
-        res.json(result.recordset);
+        const peliculas = await carteleraService.getAllPeliculas();
+        res.json(peliculas);
     } catch (err) {
-        console.error("❌ Error GET:", err);
         res.status(500).json({ codError: "500", msgRespuesta: err.message });
     }
 });
@@ -160,32 +119,17 @@ app.get("/api/cartelera", async (req, res) => {
  */
 app.post("/api/cartelera", async (req, res) => {
     try {
-        const pool = await poolPromise;
-        if (!pool) throw new Error("No hay conexión a la BD");
-
-        const { imdbID, Title, Year, Type, Poster, Estado, description, Ubication } = req.body;
+        const { imdbID, Title, Year } = req.body;
         
-        if (!imdbID || !Title || !Year) {
+        if (!imdbID || !Title || !Year) { // La validación se queda en el controlador
             return res.status(400).json({ codError: "400", msgRespuesta: "Faltan campos clave (imdbID, Title, Year)" });
         }
 
-        await pool.request()
-            .input("imdbID", sql.NVarChar(50), imdbID)
-            .input("Title", sql.NVarChar(255), Title)
-            .input("Year", sql.NVarChar(10), Year)
-            .input("Type", sql.NVarChar(50), Type)
-            .input("Poster", sql.NVarChar(500), Poster)
-            .input("Estado", sql.Bit, Estado)
-            .input("description", sql.NVarChar(sql.MAX), description)
-            .input("Ubication", sql.NVarChar(100), Ubication)
-            .query(`INSERT INTO ${TABLE_NAME} (imdbID, Title, Year, Type, Poster, Estado, description, Ubication)
-                     VALUES (@imdbID, @Title, @Year, @Type, @Poster, @Estado, @description, @Ubication)`);
+        await carteleraService.createPelicula(req.body);
 
-        // Respuesta de éxito (Serie I)
         res.status(201).json({ codError: "201", msgRespuesta: "Registro Insertado" });
     } catch (err) {
-        console.error("❌ Error POST:", err);
-        // El error 400 también captura la violación de Clave Primaria (Duplicado)
+        // El error 400 es común para datos inválidos o duplicados (violación de PK)
         res.status(400).json({ codError: "400", msgRespuesta: err.message });
     }
 });
@@ -224,38 +168,18 @@ app.post("/api/cartelera", async (req, res) => {
  */
 app.put("/api/cartelera", async (req, res) => {
     try {
-        const pool = await poolPromise;
-        if (!pool) throw new Error("No hay conexión a la BD");
-
-        // Obtiene el ID a actualizar de la Query String (?imdbID=...)
         const { imdbID: updateID } = req.query;
-        // Desestructuración completa de los 8 campos del Body
-        const { Title, Year, Type, Poster, Estado, description, Ubication } = req.body;
 
         if (!updateID) return res.status(400).json({ codError: "400", msgRespuesta: "Falta parámetro 'imdbID' en QueryString" });
 
-        const result = await pool.request()
-            .input("updateID", sql.NVarChar(50), updateID)
-            .input("Title", sql.NVarChar(255), Title)
-            .input("Year", sql.NVarChar(10), Year)
-            .input("Type", sql.NVarChar(50), Type)
-            .input("Poster", sql.NVarChar(500), Poster)
-            .input("Estado", sql.Bit, Estado)
-            .input("description", sql.NVarChar(sql.MAX), description)
-            .input("Ubication", sql.NVarChar(100), Ubication)
-            .query(`UPDATE ${TABLE_NAME} SET 
-                     Title=@Title, Year=@Year, Type=@Type, Poster=@Poster, Estado=@Estado, description=@description, Ubication=@Ubication
-                     WHERE imdbID=@updateID`);
+        const rowsAffected = await carteleraService.updatePelicula(updateID, req.body);
 
-        // Si no se afectó ninguna fila, el registro no existe
-        if (result.rowsAffected[0] === 0) {
+        if (rowsAffected === 0) {
             return res.status(404).json({ codError: "404", msgRespuesta: "Registro no encontrado" });
         }
 
-        // Respuesta de éxito (Serie II)
         res.status(200).json({ codError: "200", msgRespuesta: "Registro actualizado correctamente" });
     } catch (err) {
-        console.error("❌ Error PUT:", err);
         res.status(400).json({ codError: "400", msgRespuesta: err.message });
     }
 });
@@ -265,7 +189,15 @@ app.put("/api/cartelera", async (req, res) => {
 // Servidor
 // ================================
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-    console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
-    console.log(`📝 Documentación de la API en http://localhost:${PORT}/api-docs`);
-});
+
+// Verificamos la conexión a la BD antes de iniciar el servidor
+poolPromise.then(pool => {
+    if (pool) {
+        app.listen(PORT, () => {
+            console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
+            console.log(`📝 Documentación de la API en http://localhost:${PORT}/api-docs`);
+        });
+    } else {
+        console.log("❌ No se pudo iniciar el servidor por falta de conexión a la BD.");
+    }
+}).catch(err => console.log("❌ Falló el inicio del servidor.", err));
